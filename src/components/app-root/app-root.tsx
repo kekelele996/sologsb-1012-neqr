@@ -2,9 +2,14 @@ import { Component, Host, State, h, Listen } from '@stencil/core';
 import {
   cloneProject,
   createDemoProject,
+  createModuleTemplate,
+  instantiateModuleFromTemplate,
+  loadTemplates,
   selectedModule,
   selectedStep,
+  stepsWithExternalPrerequisites,
   STORAGE_KEY,
+  TEMPLATE_STORAGE_KEY,
   validateProject,
   type CameraAngle,
   type CaptionPosition,
@@ -13,6 +18,7 @@ import {
   type Difficulty,
   type GestureZone,
   type LessonStep,
+  type ModuleTemplate,
   type ValidationCheck,
 } from '../../models';
 
@@ -31,6 +37,9 @@ export class AppRoot {
   @State() playProgress = 0;
   @State() offline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
   @State() toast?: { color: string; message: string };
+  @State() templates: ModuleTemplate[] = [];
+  @State() showTemplatePicker = false;
+  @State() blockedTemplateSteps: string[] | null = null;
   private past: CourseProject[] = [];
   private future: CourseProject[] = [];
   private playTimer?: number;
@@ -42,6 +51,7 @@ export class AppRoot {
     } catch {
       this.project = createDemoProject();
     }
+    this.templates = loadTemplates();
   }
 
   disconnectedCallback(): void {
@@ -180,6 +190,50 @@ export class AppRoot {
       steps: [],
     };
     this.commit((draft) => ({ ...draft, modules: [...draft.modules, module], selectedModuleId: module.id, selectedStepId: '' }), '已创建课程模块。');
+  }
+
+  private persistTemplates(): void {
+    localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(this.templates));
+  }
+
+  /** 保存当前模块为模板；前置依赖跨出模块时列出步骤名称并停止创建。 */
+  private saveCurrentModuleAsTemplate(): void {
+    const module = this.currentModule;
+    if (!module) return;
+    if (module.steps.length === 0) {
+      this.showToast('warning', '空模块无法存为模板，请先编排学习步骤。');
+      return;
+    }
+    const blocked = stepsWithExternalPrerequisites(module);
+    if (blocked.length) {
+      this.blockedTemplateSteps = blocked;
+      return;
+    }
+    const template = createModuleTemplate(module);
+    this.templates = [template, ...this.templates];
+    this.persistTemplates();
+    this.showToast('success', `已将「${module.title}」存为模块模板，保存在本机可离线复用。`);
+  }
+
+  private applyTemplate(template: ModuleTemplate): void {
+    if (this.project.status === 'frozen') {
+      this.showToast('warning', '当前版本已冻结，请先创建修订版。');
+      return;
+    }
+    const module = instantiateModuleFromTemplate(template);
+    this.showTemplatePicker = false;
+    this.commit((draft) => ({
+      ...draft,
+      modules: [...draft.modules, module],
+      selectedModuleId: module.id,
+      selectedStepId: module.steps[0]?.id ?? '',
+    }), `已套用模板「${template.title}」，新模块的步骤与前置关系相互独立。`);
+  }
+
+  private deleteTemplate(templateId: string): void {
+    this.templates = this.templates.filter((item) => item.id !== templateId);
+    this.persistTemplates();
+    this.showToast('medium', '已删除模块模板。');
   }
 
   private addStep(kind: LessonStep['kind'] = '示范'): void {
@@ -540,6 +594,65 @@ export class AppRoot {
     );
   }
 
+  private renderTemplateModals() {
+    if (this.blockedTemplateSteps) {
+      return (
+        <div class="modal-backdrop" onClick={() => { this.blockedTemplateSteps = null; }}>
+          <div class="template-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div class="template-modal-head">
+              <div><span class="eyebrow">无法存为模板</span><h2>存在跨出模块的前置依赖</h2></div>
+              <button class="modal-close" onClick={() => { this.blockedTemplateSteps = null; }}>×</button>
+            </div>
+            <p class="blocked-hint">下列步骤的前置条件指向本模块之外的步骤，复用到其他班次时会悬空跳级。请先把前置改为模块内部步骤，再保存模板：</p>
+            <ul class="blocked-step-list">
+              {this.blockedTemplateSteps.map((title) => <li><span class="blocked-dot">!</span>{title}</li>)}
+            </ul>
+            <div class="template-modal-foot">
+              <ion-button class="studio-button" onClick={() => { this.blockedTemplateSteps = null; }}>返回修改前置</ion-button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    if (!this.showTemplatePicker) return null;
+    return (
+      <div class="modal-backdrop" onClick={() => { this.showTemplatePicker = false; }}>
+        <div class="template-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <div class="template-modal-head">
+            <div><span class="eyebrow">本地模块模板</span><h2>套用模板到当前课程</h2></div>
+            <button class="modal-close" onClick={() => { this.showTemplatePicker = false; }}>×</button>
+          </div>
+          {this.templates.length === 0 ? (
+            <div class="template-empty">
+              <div class="empty-glyph">模</div>
+              <p>本机还没有模块模板。在左侧模块卡片中选择“存为模板”，模板会随草稿一起保存在浏览器中，离线重开也能继续使用。</p>
+            </div>
+          ) : (
+            <div class="template-list">
+              {this.templates.map((template) => (
+                <div class="template-card" key={template.id}>
+                  <button class="template-card-main" onClick={() => this.applyTemplate(template)}>
+                    <span class="module-color" style={{ background: template.color }} />
+                    <span class="template-card-copy">
+                      <strong>{template.title}</strong>
+                      <small>{template.steps.length} 个学习步骤 · 保存于 {this.formatDate(template.savedAt)}</small>
+                      <em>{template.summary}</em>
+                    </span>
+                    <span class="template-apply">套用 →</span>
+                  </button>
+                  <button class="template-delete" title="删除该模板" onClick={() => this.deleteTemplate(template.id)}>删除</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div class="template-modal-foot">
+            <ion-button fill="clear" class="studio-button" onClick={() => { this.showTemplatePicker = false; }}>取消</ion-button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   render() {
     const module = this.currentModule;
     const errors = this.checks.filter((check) => check.severity === 'error').length;
@@ -602,6 +715,14 @@ export class AppRoot {
                 <div class="module-editor">
                   <ion-input disabled={this.project.status === 'frozen'} label="当前模块标题" labelPlacement="stacked" class="studio-input" value={module?.title ?? ''} onIonInput={(event) => this.updateCurrentModule({ title: event.detail.value ?? '' })} />
                   <ion-textarea disabled={this.project.status === 'frozen'} autoGrow label="模块目标" labelPlacement="stacked" class="studio-input" value={module?.summary ?? ''} onIonInput={(event) => this.updateCurrentModule({ summary: event.detail.value ?? '' })} />
+                  <div class="template-actions">
+                    <button class="template-action-button" onClick={() => this.saveCurrentModuleAsTemplate()} title="把当前模块的标题、步骤字段和检查点存为可复用模板">
+                      <span class="template-icon">存</span><span>存为模板</span>
+                    </button>
+                    <button class="template-action-button" onClick={() => { this.showTemplatePicker = true; }} title="选择本机模板，生成步骤与前置关系相互独立的新模块">
+                      <span class="template-icon">套</span><span>套用模板<i>{this.templates.length}</i></span>
+                    </button>
+                  </div>
                 </div>
               </aside>
 
@@ -616,6 +737,7 @@ export class AppRoot {
               {this.renderPreview()}
             </main>
           </ion-content>
+          {this.renderTemplateModals()}
           <ion-toast isOpen={Boolean(this.toast)} message={this.toast?.message} color={this.toast?.color} duration={3200} onDidDismiss={() => { this.toast = undefined; }} />
         </ion-app>
       </Host>

@@ -33,6 +33,16 @@ export interface CourseModule {
   steps: LessonStep[];
 }
 
+export interface ModuleTemplate {
+  id: string;
+  title: string;
+  summary: string;
+  color: string;
+  savedAt: string;
+  // 步骤使用模板内部编号，prerequisiteId 只引用同模板内的步骤
+  steps: LessonStep[];
+}
+
 export interface FrozenVersion {
   id: string;
   label: string;
@@ -64,6 +74,84 @@ export interface ValidationCheck {
 }
 
 export const STORAGE_KEY = 'sologsb-1012-sign-course-project-v1';
+export const TEMPLATE_STORAGE_KEY = 'sologsb-1012-sign-course-module-templates-v1';
+
+/** 前置关系指向当前模块之外（含已被删除）的步骤，返回这些步骤的名称清单。 */
+export function stepsWithExternalPrerequisites(module: CourseModule): string[] {
+  const titles: string[] = [];
+  module.steps.forEach((step) => {
+    if (step.prerequisiteId && !module.steps.some((candidate) => candidate.id === step.prerequisiteId)) {
+      titles.push(step.title);
+    }
+  });
+  return titles;
+}
+
+/**
+ * 把打磨好的模块存成模板：步骤重新分配模板内编号，并把前置关系重写到新编号上。
+ * 模板是深拷贝快照，之后原模块的任何改动都不会影响模板。
+ * 调用前应先用 stepsWithExternalPrerequisites 确认所有前置都落在模块内部。
+ */
+export function createModuleTemplate(
+  module: CourseModule,
+  options: { id?: string; savedAt?: string } = {},
+): ModuleTemplate {
+  const idMap = new Map<string, string>();
+  const steps = module.steps.map((step, index) => {
+    const newId = `template-step-${index + 1}`;
+    idMap.set(step.id, newId);
+    return { ...structuredClone(step), id: newId };
+  });
+  steps.forEach((step) => {
+    if (step.prerequisiteId) step.prerequisiteId = idMap.get(step.prerequisiteId) ?? '';
+  });
+  return {
+    id: options.id ?? `template-${Date.now().toString(36)}`,
+    title: module.title,
+    summary: module.summary,
+    color: module.color,
+    savedAt: options.savedAt ?? new Date().toISOString(),
+    steps,
+  };
+}
+
+/**
+ * 套用模板：生成全新的模块，每个步骤拿到课程内唯一的新 id，
+ * 前置关系按模板内部的顺序重连到新步骤，不保留任何对模板或原模块的引用。
+ */
+export function instantiateModuleFromTemplate(
+  template: ModuleTemplate,
+  options: { id?: string; makeStepId?: (index: number) => string } = {},
+): CourseModule {
+  const makeStepId = options.makeStepId ?? ((index) => `step-${Date.now().toString(36)}-${index + 1}-${Math.random().toString(36).slice(2, 6)}`);
+  const idMap = new Map<string, string>();
+  const steps = template.steps.map((step, index) => {
+    const newId = makeStepId(index);
+    idMap.set(step.id, newId);
+    return { ...structuredClone(step), id: newId };
+  });
+  steps.forEach((step) => {
+    if (step.prerequisiteId) step.prerequisiteId = idMap.get(step.prerequisiteId) ?? '';
+  });
+  return {
+    id: options.id ?? `module-${Date.now().toString(36)}`,
+    title: template.title,
+    summary: template.summary,
+    color: template.color,
+    steps,
+  };
+}
+
+/** 从本地读取模板库；数据损坏时回退为空列表，避免阻断草稿编辑。 */
+export function loadTemplates(): ModuleTemplate[] {
+  try {
+    const saved = localStorage.getItem(TEMPLATE_STORAGE_KEY);
+    const parsed = saved ? JSON.parse(saved) : [];
+    return Array.isArray(parsed) ? (parsed as ModuleTemplate[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 export function createDemoProject(): CourseProject {
   const modules: CourseModule[] = [
