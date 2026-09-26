@@ -40,6 +40,15 @@ export interface FrozenVersion {
   snapshot: Omit<CourseProject, 'frozenVersions'>;
 }
 
+export interface ModuleTemplate {
+  id: string;
+  createdAt: string;
+  title: string;
+  summary: string;
+  color: string;
+  steps: LessonStep[];
+}
+
 export interface CourseProject {
   id: string;
   title: string;
@@ -49,6 +58,7 @@ export interface CourseProject {
   selectedModuleId: string;
   selectedStepId: string;
   modules: CourseModule[];
+  templates: ModuleTemplate[];
   frozenVersions: FrozenVersion[];
   lastSavedAt: string;
   revision: number;
@@ -194,6 +204,7 @@ export function createDemoProject(): CourseProject {
     selectedModuleId: 'module-1',
     selectedStepId: 'step-1-2',
     modules,
+    templates: [],
     frozenVersions: [],
     lastSavedAt: new Date().toISOString(),
     revision: 1,
@@ -207,6 +218,43 @@ export function selectedModule(project: CourseProject): CourseModule {
 export function selectedStep(project: CourseProject): LessonStep | undefined {
   const module = selectedModule(project);
   return module?.steps.find((step) => step.id === project.selectedStepId) ?? module?.steps[0];
+}
+
+export function createModuleTemplate(module: CourseModule): ModuleTemplate {
+  return {
+    id: `template-${Date.now().toString(36)}`,
+    createdAt: new Date().toISOString(),
+    title: module.title,
+    summary: module.summary,
+    color: module.color,
+    steps: structuredClone(module.steps),
+  };
+}
+
+export type TemplateApplyResult =
+  | { ok: true; module: CourseModule }
+  | { ok: false; externalSteps: string[] };
+
+export function applyModuleTemplate(template: ModuleTemplate, seed: string): TemplateApplyResult {
+  const idMap = new Map(template.steps.map((step, index) => [step.id, `step-${seed}-${index}`]));
+  const externalSteps = template.steps
+    .filter((step) => step.prerequisiteId && !idMap.has(step.prerequisiteId))
+    .map((step) => step.title);
+  if (externalSteps.length > 0) return { ok: false, externalSteps };
+  return {
+    ok: true,
+    module: {
+      id: `module-${seed}`,
+      title: template.title,
+      summary: template.summary,
+      color: template.color,
+      steps: template.steps.map((step) => ({
+        ...structuredClone(step),
+        id: idMap.get(step.id) ?? step.id,
+        prerequisiteId: step.prerequisiteId ? (idMap.get(step.prerequisiteId) ?? '') : '',
+      })),
+    },
+  };
 }
 
 export function validateProject(project: CourseProject): ValidationCheck[] {

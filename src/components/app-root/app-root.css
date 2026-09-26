@@ -79,6 +79,21 @@ ion-content { --background: var(--studio-canvas); }
 .step-issue-count { min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center; border-radius: 10px; background: #fff1df; color: #8e5300; font-size: 9px; }
 .module-editor { padding: 12px; border-top: 1px solid var(--studio-line); background: #f1f6f4; display: flex; flex-direction: column; gap: 8px; }
 .module-editor .studio-input { --min-height: 42px; font-size: 11px; }
+.module-editor .studio-button { font-size: 11px; --border-radius: 7px; }
+.template-hint { margin: 2px 0 0; padding: 8px 9px; border: 1px dashed var(--studio-line); border-radius: 8px; color: var(--studio-muted); font-size: 9px; line-height: 1.6; }
+.template-shelf { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--studio-line); }
+.template-shelf > .eyebrow { margin-bottom: 1px; }
+.template-card { display: grid; grid-template-columns: 6px 1fr auto; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--studio-line); border-radius: 8px; background: #fff; }
+.template-color { width: 5px; height: 30px; border-radius: 3px; align-self: stretch; }
+.template-info { min-width: 0; }
+.template-info strong, .template-info small { display: block; }
+.template-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.template-info small { margin-top: 3px; color: var(--studio-muted); font-size: 9px; white-space: nowrap; }
+.template-actions { display: flex; gap: 4px; }
+.template-actions button { padding: 4px 8px; border: 1px solid #a9bbb7; border-radius: 6px; background: #fff; color: #1f675b; cursor: pointer; font-size: 10px; }
+.template-actions button:hover { background: #edf4f2; }
+.template-actions button.danger { color: var(--studio-danger); border-color: #e0b1ab; }
+.template-actions button:disabled { opacity: .45; cursor: not-allowed; }
 
 .editor-panel { display: flex; flex-direction: column; }
 .panel-switcher { min-height: 50px; padding: 0 16px; display: flex; align-items: flex-end; gap: 18px; border-bottom: 1px solid var(--studio-line); background: #fff; }

@@ -1,7 +1,9 @@
 import { Component, Host, State, h, Listen } from '@stencil/core';
 import {
+  applyModuleTemplate,
   cloneProject,
   createDemoProject,
+  createModuleTemplate,
   selectedModule,
   selectedStep,
   STORAGE_KEY,
@@ -13,6 +15,7 @@ import {
   type Difficulty,
   type GestureZone,
   type LessonStep,
+  type ModuleTemplate,
   type ValidationCheck,
 } from '../../models';
 
@@ -30,7 +33,7 @@ export class AppRoot {
   @State() playing = false;
   @State() playProgress = 0;
   @State() offline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
-  @State() toast?: { color: string; message: string };
+  @State() toast?: { color: string; message: string; duration: number };
   private past: CourseProject[] = [];
   private future: CourseProject[] = [];
   private playTimer?: number;
@@ -38,7 +41,10 @@ export class AppRoot {
   componentWillLoad(): void {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) this.project = JSON.parse(saved) as CourseProject;
+      if (saved) {
+        const parsed = JSON.parse(saved) as CourseProject;
+        this.project = { ...parsed, templates: parsed.templates ?? [] };
+      }
     } catch {
       this.project = createDemoProject();
     }
@@ -133,11 +139,11 @@ export class AppRoot {
     this.persist();
   }
 
-  private showToast(color: string, message: string): void {
-    this.toast = { color, message };
+  private showToast(color: string, message: string, duration = 3_200): void {
+    this.toast = { color, message, duration };
     window.setTimeout(() => {
       if (this.toast?.message === message) this.toast = undefined;
-    }, 3_200);
+    }, duration);
   }
 
   private selectModule(moduleId: string): void {
@@ -180,6 +186,52 @@ export class AppRoot {
       steps: [],
     };
     this.commit((draft) => ({ ...draft, modules: [...draft.modules, module], selectedModuleId: module.id, selectedStepId: '' }), '已创建课程模块。');
+  }
+
+  private saveModuleAsTemplate(): void {
+    const module = this.currentModule;
+    if (!module || module.steps.length === 0) {
+      this.showToast('warning', '当前模块还没有学习步骤，无法保存为模板。');
+      return;
+    }
+    const template = createModuleTemplate(module);
+    this.commit(
+      (draft) => ({ ...draft, templates: [...draft.templates, template] }),
+      `已将「${template.title}」保存为模块模板，可离线复用到其他班次。`,
+    );
+  }
+
+  private applyTemplate(templateId: string): void {
+    const template = this.project.templates.find((item) => item.id === templateId);
+    if (!template) return;
+    const result = applyModuleTemplate(template, Date.now().toString(36));
+    if (!result.ok) {
+      this.showToast(
+        'danger',
+        `以下步骤的前置依赖已跨出模块：${result.externalSteps.join('、')}。请在模板来源中改为模块内依赖，已停止创建。`,
+        6_000,
+      );
+      return;
+    }
+    const newModule = result.module;
+    this.commit(
+      (draft) => ({
+        ...draft,
+        modules: [...draft.modules, newModule],
+        selectedModuleId: newModule.id,
+        selectedStepId: newModule.steps[0]?.id ?? '',
+      }),
+      `已套用模板「${template.title}」，步骤编号与模块内前置关系均已独立生成。`,
+    );
+  }
+
+  private deleteTemplate(templateId: string): void {
+    const template = this.project.templates.find((item) => item.id === templateId);
+    if (!template) return;
+    this.commit(
+      (draft) => ({ ...draft, templates: draft.templates.filter((item) => item.id !== templateId) }),
+      `已删除模板「${template.title}」，已套用的模块不受影响。`,
+    );
   }
 
   private addStep(kind: LessonStep['kind'] = '示范'): void {
@@ -337,6 +389,31 @@ export class AppRoot {
     if (this.project.status === 'changes') return <ion-badge color="danger">已退回</ion-badge>;
     if (this.project.status === 'frozen') return <ion-badge color="success">已冻结</ion-badge>;
     return <ion-badge color="medium">草稿</ion-badge>;
+  }
+
+  private renderTemplateShelf() {
+    if (this.project.templates.length === 0) {
+      return <p class="template-hint">保存打磨好的模块（标题、步骤字段与检查点），套用时会生成独立步骤并重连前置关系，模板随本地草稿离线保留。</p>;
+    }
+    const frozen = this.project.status === 'frozen';
+    return (
+      <div class="template-shelf">
+        <span class="eyebrow">模块模板 · 本地离线保留</span>
+        {this.project.templates.map((template: ModuleTemplate) => (
+          <div class="template-card" key={template.id}>
+            <span class="template-color" style={{ background: template.color }} />
+            <div class="template-info">
+              <strong>{template.title}</strong>
+              <small>{template.steps.length} 个步骤 · 存于 {this.formatDate(template.createdAt)}</small>
+            </div>
+            <div class="template-actions">
+              <button disabled={frozen} onClick={() => this.applyTemplate(template.id)} title="生成独立模块并重连前置关系">套用</button>
+              <button class="danger" onClick={() => this.deleteTemplate(template.id)} title="删除模板（不影响已套用的模块）">删</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   }
 
   private renderStepListItem(step: LessonStep, index: number) {
@@ -602,6 +679,8 @@ export class AppRoot {
                 <div class="module-editor">
                   <ion-input disabled={this.project.status === 'frozen'} label="当前模块标题" labelPlacement="stacked" class="studio-input" value={module?.title ?? ''} onIonInput={(event) => this.updateCurrentModule({ title: event.detail.value ?? '' })} />
                   <ion-textarea disabled={this.project.status === 'frozen'} autoGrow label="模块目标" labelPlacement="stacked" class="studio-input" value={module?.summary ?? ''} onIonInput={(event) => this.updateCurrentModule({ summary: event.detail.value ?? '' })} />
+                  <ion-button disabled={this.project.status === 'frozen'} expand="block" fill="outline" class="studio-button" onClick={() => this.saveModuleAsTemplate()}>将当前模块存为模板</ion-button>
+                  {this.renderTemplateShelf()}
                 </div>
               </aside>
 
@@ -616,7 +695,7 @@ export class AppRoot {
               {this.renderPreview()}
             </main>
           </ion-content>
-          <ion-toast isOpen={Boolean(this.toast)} message={this.toast?.message} color={this.toast?.color} duration={3200} onDidDismiss={() => { this.toast = undefined; }} />
+          <ion-toast isOpen={Boolean(this.toast)} message={this.toast?.message} color={this.toast?.color} duration={this.toast?.duration ?? 3200} onDidDismiss={() => { this.toast = undefined; }} />
         </ion-app>
       </Host>
     );
